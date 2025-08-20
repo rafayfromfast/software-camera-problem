@@ -1,133 +1,271 @@
 
 
-def overlap_range(r1, r2):
-    """Return the overlap of two ranges or None if they don't overlap."""
-    start = max(r1[0], r2[0])
-    end = min(r1[1], r2[1])
-    return (start, end) if start <= end else None
 
-def merge_ranges(ranges):
-    """Merge overlapping or touching ranges into a sorted list."""
-    if not ranges:
-        return []
-    ranges = sorted(ranges)  # sort by start
-    merged = [ranges[0]]
-    for s, e in ranges[1:]:
-        last_s, last_e = merged[-1]
-        if s <= last_e:  # overlap or touch
-            merged[-1] = (last_s, max(last_e, e))
-        else:
-            merged.append((s, e))
-    return merged
+def coversTarget(target, pieces):
+    """Return True if union of pieces covers the whole target range."""
 
-def covers_target(target_range, pieces):
-    """
-    Do the ranges in 'pieces' fully cover 'target_range'?
-    Steps:
-      1) Clip each piece to target
-      2) Merge
-      3) Check for gaps
-    """
+    targetStart, targetEnd = target
+    # clip each piece to the target and keep the ones that touch it
     clipped = []
-    for piece in pieces:
-        o = overlap_range(piece, target_range)
-        if o:
-            clipped.append(o)
+    for start, end in pieces:
+        start = max(start, targetStart)
+        end = min(end, targetEnd)
+        if start <= end:
+            clipped.append((start, end))
 
-    merged = merge_ranges(clipped)
-    if not merged:
+    if not clipped:
         return False
 
-    need_start, need_end = target_range
-    covered_to = need_start
-
-    for s, e in merged:
-        if s > covered_to:       # gap found
-            return False
-        covered_to = max(covered_to, e)
-        if covered_to >= need_end:
+    # sort by start, sweep left to right
+    clipped.sort()
+    coveredTo = targetStart
+    for start,end in clipped:
+        if start > coveredTo:
+            return False #Gap found
+        coveredTo = max(end, coveredTo) #using max so we always move forward
+        if coveredTo >= targetEnd:
             return True
+    return coveredTo >= targetEnd
 
-    return covered_to >= need_end
 
-def will_cameras_work(desired_distance, desired_light, cameras):
-    """
-    Return True if the cameras cover every point in:
-      distance in desired_distance  ×  light in desired_light
+def willCamerasWork(desiredDistance, desiredLight, cameras):
+    dmin, dmax = desiredDistance
+    lmin, lmax = desiredLight
+    if dmin > dmax or lmin > lmax:
+        raise ValueError("Ranges are invalid")
+    
+    if dmin == dmax:
+        activeLights = [light for dist, light in cameras if dist[0] <= dmin <= dist[1]]
+        return coversTarget(desiredLight, activeLights)
+    
 
-    Method (2D panes):
-      - Break the distance axis into panes using all distance endpoints.
-      - In each pane, active cameras (by distance) don't change.
-      - For that pane, check if the union of their light ranges
-        covers the whole desired_light range.
-    """
-    dist_min, dist_max = desired_distance
-    light_min, light_max = desired_light
+    # Build Breakpoints
 
-    if dist_min > dist_max or light_min > light_max:
-        raise ValueError("Ranges must be (min <= max).")
+    points = {dmin, dmax}
 
-    points = {dist_min, dist_max}
-    for (cam_dist, cam_light) in cameras:
-        points.add(cam_dist[0])
-        points.add(cam_dist[1])
+    for dist, _l in cameras:
+        if dist[0] >= dmin and dist[0] <= dmax: 
+            points.add(dist[0])
+        if dist[1] >= dmin and dist[1] <= dmax: 
+            points.add(dist[1])
 
-    xs = sorted(points)
 
-    # Check each distance pane that overlaps the desired distance
-    for i in range(len(xs) - 1):
-        pane_start = xs[i]
-        pane_end = xs[i + 1]
+    sortedPoints = sorted(points)
 
-        if pane_end <= dist_min or pane_start >= dist_max:
-            continue
 
-        # Clip pane to desired distance and pick midpoint
-        left = max(pane_start, dist_min)
-        right = min(pane_end, dist_max)
-        if left >= right:
-            continue
+
+    # Iterate all panes
+
+    for i in range(len(sortedPoints) - 1):
+        left = sortedPoints[i]
+        right = sortedPoints[i + 1]
 
         mid = (left + right) / 2.0
 
-        # Light ranges of cameras active at this distance
-        active_lights = []
-        for (cam_dist, cam_light) in cameras:
-            if cam_dist[0] <= mid <= cam_dist[1]:
-                active_lights.append(cam_light)
+        activeLights = [light for dist, light in cameras if dist[0] <= mid <= dist[1]]
 
-        # Must cover the whole desired light range in this pane
-        if not covers_target(desired_light, active_lights):
+        if not coversTarget(desiredLight, activeLights):
             return False
-
+        
     return True
 
-# -----------------------
-# Example tests
-# -----------------------
-if __name__ == "__main__":
-    # Example 1: Works (cameras split light but all cover the full distance)
-    want_distance = (3, 10)
-    want_light = (0, 10)
-    cams_ok = [
-        ((0, 10), (0, 4)),
-        ((0, 10), (4, 7)),
-        ((0, 10), (7, 10)),
-    ]
-    print("Example 1 ->", will_cameras_work(want_distance, want_light, cams_ok))  # True
 
-    # Example 2: Fails (gap in light coverage for some distance pane)
-    cams_bad = [
-        ((3, 9),  (0, 4)),
-        ((2, 6),  (4, 7)),
-        ((4, 10), (7, 10)),
-    ]
-    print("Example 2 ->", will_cameras_work((3, 10), (0, 10), cams_bad))  # False
 
-    # Example 3: Different distance sets; each pane still covers full light
-    cams_mixed = [
-        ((0, 5),  (0, 10)),  # near distances: full light
-        ((5, 10), (0, 5)),   # far distances: lower half light
-        ((5, 10), (5, 10)),  # far distances: upper half light
-    ]
-    print("Example 3 ->", will_cameras_work((0, 10), (0, 10), cams_mixed))  # True
+##  Example Tests   ##
+
+def run(desc, desiredDist, desiredLight, cams, expected):
+    got = willCamerasWork(desiredDist, desiredLight, cams)
+    print(f"{desc:60} -> {got} (expected {expected})", "✅" if got == expected else "❌")
+
+
+# 1) Single camera covers everything (easy pass)
+run(
+    "Single camera covers full distance & light",
+    (0, 10), (0, 10),
+    [((0, 10), (0, 10))],
+    True
+)
+
+# 2) Split light across multiple cameras, same distance for all (pass)
+run(
+    "Split light across three cams, all cover same distance",
+    (0, 10), (0, 10),
+    [((0, 10), (0, 4)), ((0, 10), (4, 7)), ((0, 10), (7, 10))],
+    True
+)
+
+# 3) Light gap at some distances (fail)
+run(
+    "At some distances, light union has a gap",
+    (0, 10), (0, 10),
+    [((3, 9), (0, 4)), ((2, 6), (4, 7)), ((4, 10), (7, 10))],
+    False
+)
+
+# 4) Split distance into near/far, each side fully covers light (pass)
+run(
+    "Near (0–5) has full light; far (5–10) has full light via two cams",
+    (0, 10), (0, 10),
+    [((0, 5), (0, 10)), ((5, 10), (0, 5)), ((5, 10), (5, 10))],
+    True
+)
+
+# 5) Distance gap: no camera valid around mid-distance (fail)
+run(
+    "Distance gap: no cameras active in (4,6)",
+    (0, 10), (0, 10),
+    [((0, 4), (0, 10)), ((6, 10), (0, 10))],
+    False
+)
+
+# 6) Exact-touching light intervals count as covered (inclusive ends) (pass)
+run(
+    "Light intervals touch at endpoints (0–4, 4–7, 7–10) => covered",
+    (0, 10), (0, 10),
+    [((0, 10), (0, 4)), ((0, 10), (4, 7)), ((0, 10), (7, 10))],
+    True
+)
+
+# 7) Nested intervals won’t “shrink” coverage thanks to max() (pass)
+run(
+    "Nested light intervals; outer one provides main coverage",
+    (0, 10), (0, 10),
+    [((0, 10), (0, 7)), ((0, 10), (3, 5)), ((0, 10), (6, 9)), ((0, 10), (9, 10))],
+    True
+)
+
+# 8) Camera spans beyond desired distance; still okay (pass)
+run(
+    "Camera distance spans outside desired, still covers inside",
+    (0, 10), (0, 10),
+    [((-100, 100), (0, 10))],
+    True
+)
+
+# 9) Cameras exist but their light is outside target (fail after clipping)
+run(
+    "Cameras' light ranges outside target; clipping empties coverage",
+    (0, 10), (0, 10),
+    [((0, 10), (11, 20)), ((0, 10), (-5, -1))],
+    False
+)
+
+# 10) Unordered cameras; algorithm should still work (pass)
+run(
+    "Unordered cams; sorting inside algorithm handles it",
+    (0, 10), (0, 10),
+    [((0, 10), (7, 10)), ((0, 10), (0, 4)), ((0, 10), (4, 7))],
+    True
+)
+
+# 11) Very small (float) panes: coverage in small steps (pass)
+run(
+    "Floats: light covered in small steps (0–1 via 0.3 steps)",
+    (0.0, 10.0), (0.0, 1.0),
+    [((0.0, 10.0), (0.0, 0.3)), ((0.0, 10.0), (0.3, 0.6)), ((0.0, 10.0), (0.6, 1.0))],
+    True
+)
+
+# 12) Floats with a tiny gap (fail)
+run(
+    "Floats: tiny gap (0.6–0.61) leaves target (0–1) uncovered",
+    (0.0, 10.0), (0.0, 1.0),
+    [((0.0, 10.0), (0.0, 0.6)), ((0.0, 10.0), (0.61, 1.0))],
+    False
+)
+
+# 13) Zero-width desired LIGHT (point coverage) with valid cam (pass)
+run(
+    "Desired light is a single value; a cam must include that value",
+    (0, 10), (5, 5),
+    [((0, 10), (3, 7))],
+    True
+)
+
+# 14) Zero-width desired LIGHT with no cam including the point (fail)
+run(
+    "Desired light is point 5; no camera includes 5",
+    (0, 10), (5, 5),
+    [((0, 10), (0, 4)), ((0, 10), (6, 10))],
+    False
+)
+
+# 15) Zero-width desired DISTANCE (your special-case path) (pass)
+run(
+    "Zero-width distance at 5; at that distance, lights cover fully",
+    (5, 5), (0, 10),
+    [((0, 6), (0, 4)), ((0, 6), (4, 10))],
+    True
+)
+
+# 16) Zero-width distance at 5 but light gap at that point (fail)
+run(
+    "Zero-width distance at 5; light gap at that point",
+    (5, 5), (0, 10),
+    [((0, 6), (0, 4)), ((0, 6), (6, 10))],
+    False
+)
+
+# 17) Coverage fails only in one distance pane (fail)
+run(
+    "Two panes: left ok, right has light gap -> overall fail",
+    (0, 10), (0, 10),
+    [((0, 5), (0, 10)), ((5, 10), (0, 4)), ((5, 10), (6, 10))],
+    False
+)
+
+# 18) Large numbers (stress basic arithmetic) (pass)
+run(
+    "Large numbers: still a simple sort & sweep",
+    (0, 1_000_000), (0, 1_000_000),
+    [((0, 1_000_000), (0, 600_000)), ((0, 1_000_000), (600_000, 1_000_000))],
+    True
+)
+
+# 19) Negative ranges (algorithm doesn’t assume positives) (pass)
+run(
+    "Negative ranges: cameras cover (-10..10) in light via two pieces",
+    (-5, 5), (-10, 10),
+    [((-5, 5), (-10, 0)), ((-5, 5), (0, 10))],
+    True
+)
+
+# 20) Cameras active only at a boundary distance; others cover rest (pass)
+run(
+    "Boundary-only camera at distance 3; others cover panes; still pass",
+    (3, 10), (0, 10),
+    [((3, 3), (0, 10)), ((3, 10), (0, 4)), ((3, 10), (4, 10))],
+    True
+)
+
+# 21) No cameras at all (fail)
+run(
+    "No cameras -> can't cover anything",
+    (0, 10), (0, 10),
+    [],
+    False
+)
+
+# 22) Light coverage depends on different cameras in different panes (pass)
+run(
+    "Different panes use different cams; each pane still fully covers light",
+    (0, 10), (0, 10),
+    [((0, 4), (0, 10)), ((4, 7), (0, 10)), ((7, 10), (0, 10))],
+    True
+)
+
+# 23) Light clipping inside target (partial pieces still help) (pass)
+run(
+    "Pieces extend beyond target light; clipping preserves coverage",
+    (0, 10), (2, 8),
+    [((0, 10), (0, 5)), ((0, 10), (5, 10))],
+    True
+)
+
+# 24) Pane with no active cameras (fail fast)
+run(
+    "A pane has zero active cams by distance -> immediate fail",
+    (0, 10), (0, 10),
+    [((0, 3), (0, 10)), ((7, 10), (0, 10))],  # nothing covers (3,7)
+    False
+)
